@@ -3,12 +3,12 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 
-# Настройка страницы для мобильных устройств
+# Настройка страницы
 st.set_page_config(
     page_title="Моя Личная Библиотека",
     page_icon="📚",
     layout="centered",
-    initial_sidebar_state="collapsed",  # Автоматически сворачивает меню на телефоне
+    initial_sidebar_state="expanded",
 )
 
 # Папка для электронных книг
@@ -21,7 +21,7 @@ def get_connection():
     return sqlite3.connect("library_v2.db", check_same_thread=False)
 
 
-# Инициализация структуры таблицы
+# Инициализация таблицы
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
@@ -44,7 +44,7 @@ def init_db():
 init_db()
 
 # --- ЗАЩИТА ПАРОЛЕМ ---
-PASSWORD = "1234"  # <--- ПОМЕНЯЙ ПАРОЛЬ НА СВОЙ!
+PASSWORD = "1234"  # Измени пароль при необходимости
 
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
@@ -63,7 +63,7 @@ if not st.session_state["authenticated"]:
 
 st.title("📚 Личная библиотека")
 
-# Меню навигации
+# Боковое меню
 menu = st.sidebar.radio(
     "Навигация",
     ["📖 Каталог книг", "➕ Добавить книгу", "✏️ Редактировать / Удалить"],
@@ -81,30 +81,24 @@ if menu == "📖 Каталог книг":
         "🔍 Поиск", placeholder="Название, автор или цитата..."
     )
 
-    col1, col2 = st.columns(2)
-    with col1:
-        category_filter = st.selectbox(
-            "Категория",
-            [
-                "Все",
-                "Художественная",
-                "Нон-фикшн",
-                "Детектив",
-                "Фантастика",
-                "Психология",
-                "Учеба / Бизнес",
-                "Другое",
-            ],
-        )
-    with col2:
-        sort_by = st.selectbox(
-            "Сортировать по",
-            [
-                "Названию (А-Я)",
-                "Году (сначала новые)",
-                "Году (сначала старые)",
-            ],
-        )
+    category_filter = st.selectbox(
+        "Категория",
+        [
+            "Все",
+            "Художественная",
+            "Нон-фикшн",
+            "Детектив",
+            "Фантастика",
+            "Психология",
+            "Учеба / Бизнес",
+            "Другое",
+        ],
+    )
+
+    sort_by = st.selectbox(
+        "Сортировать по",
+        ["Названию (А-Я)", "Году (сначала новые)", "Году (сначала старые)"],
+    )
 
     df = pd.read_sql_query("SELECT * FROM books", conn)
 
@@ -163,7 +157,7 @@ elif menu == "➕ Добавить книгу":
         title = st.text_input("Название книги*")
         author = st.text_input("Автор*")
         year = st.number_input(
-            "Год издания", min_value=0, max_value=2030, value=2024
+            "Год издания", min_value=0, max_value=2030, value=2024, step=1
         )
 
         category = st.selectbox(
@@ -182,11 +176,16 @@ elif menu == "➕ Добавить книгу":
         location = st.text_input(
             "Местонахождение", placeholder="Например: Шкаф в гостиной, 2 полка"
         )
+
         status = st.selectbox(
             "Статус",
             ["Дома на полке", "В процессе чтения", "Прочитано", "Отдано почитать"],
         )
-        notes = st.text_area("Заметки / Цитаты")
+
+        notes = st.text_area(
+            "Заметки / Цитаты / Комментарии",
+            placeholder="Внесите личные мысли или цитаты...",
+        )
 
         uploaded_file = st.file_uploader(
             "Электронная книга (PDF, EPUB, FB2)",
@@ -221,9 +220,9 @@ elif menu == "➕ Добавить книгу":
                     ),
                 )
                 conn.commit()
-                st.success(f"Книга «{title}» добавлена!")
+                st.success(f"Книга «{title}» успешно добавлена!")
             else:
-                st.error("Заполните название и автора.")
+                st.error("Пожалуйста, заполните Название и Автора.")
 
 # ==========================================
 # 3. РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ
@@ -235,7 +234,7 @@ elif menu == "✏️ Редактировать / Удалить":
 
     if not df.empty:
         book_to_edit = st.selectbox(
-            "Выберите книгу",
+            "Выберите книгу для редактирования",
             options=df["id"].tolist(),
             format_func=lambda x: f"{df[df['id'] == x]['title'].values[0]} — {df[df['id'] == x]['author'].values[0]}",
         )
