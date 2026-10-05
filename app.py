@@ -179,7 +179,7 @@ elif menu == "➕ Добавить книгу":
 
         status = st.selectbox(
             "Статус",
-            ["Дома на полке", "В процессе чтения", "Прочитано", "Отдано почитать"],
+            ["В очередь", "В процессе чтения", "Прочитано", "Отдано почитать"],
         )
 
         notes = st.text_area(
@@ -243,23 +243,20 @@ elif menu == "✏️ Редактировать / Удалить":
         cursor.execute("SELECT * FROM books WHERE id = ?", (book_to_edit,))
         book_data = cursor.fetchone()
 
+        statuses = [
+            "В очередь",
+            "В процессе чтения",
+            "Прочитано",
+            "Отдано почитать",
+        ]
+        current_status = (
+            book_data[6] if book_data[6] in statuses else "В очередь"
+        )
+
         new_status = st.selectbox(
             "Статус",
-            ["Дома на полке", "В процессе чтения", "Прочитано", "Отдано почитать"],
-            index=[
-                "Дома на полке",
-                "В процессе чтения",
-                "Прочитано",
-                "Отдано почитать",
-            ].index(book_data[6])
-            if book_data[6]
-            in [
-                "Дома на полке",
-                "В процессе чтения",
-                "Прочитано",
-                "Отдано почитать",
-            ]
-            else 0,
+            statuses,
+            index=statuses.index(current_status),
         )
         new_location = st.text_input("Местонахождение", value=book_data[5] or "")
         new_notes = st.text_area("Заметки", value=book_data[7] or "")
