@@ -3,12 +3,15 @@ import sqlite3
 import pandas as pd
 import streamlit as st
 
-# Настройка страницы
+# Настройка страницы для мобильных устройств
 st.set_page_config(
-    page_title="Моя Личная Библиотека", page_icon="📚", layout="centered"
+    page_title="Моя Личная Библиотека",
+    page_icon="📚",
+    layout="centered",
+    initial_sidebar_state="collapsed",  # Автоматически сворачивает меню на телефоне
 )
 
-# Папка для хранения электронных книг
+# Папка для электронных книг
 BOOKS_DIR = "uploaded_books"
 os.makedirs(BOOKS_DIR, exist_ok=True)
 
@@ -40,9 +43,27 @@ def init_db():
 
 init_db()
 
+# --- ЗАЩИТА ПАРОЛЕМ ---
+PASSWORD = "1234"  # <--- ПОМЕНЯЙ ПАРОЛЬ НА СВОЙ!
+
+if "authenticated" not in st.session_state:
+    st.session_state["authenticated"] = False
+
+if not st.session_state["authenticated"]:
+    st.title("🔒 Вход в библиотеку")
+    user_pass = st.text_input("Введите пароль для доступа:", type="password")
+    if st.button("Войти"):
+        if user_pass == PASSWORD:
+            st.session_state["authenticated"] = True
+            st.rerun()
+        else:
+            st.error("Неверный пароль!")
+    st.stop()
+# ----------------------
+
 st.title("📚 Личная библиотека")
 
-# Боковое меню
+# Меню навигации
 menu = st.sidebar.radio(
     "Навигация",
     ["📖 Каталог книг", "➕ Добавить книгу", "✏️ Редактировать / Удалить"],
@@ -51,18 +72,17 @@ menu = st.sidebar.radio(
 conn = get_connection()
 
 # ==========================================
-# 1. КАТАЛОГ КНИГ (Поиск, Сортировка, Просмотр)
+# 1. КАТАЛОГ КНИГ
 # ==========================================
 if menu == "📖 Каталог книг":
     st.header("Каталог книг")
 
-    # Панель поиска и фильтров
-    col1, col2 = st.columns([2, 1])
+    search_query = st.text_input(
+        "🔍 Поиск", placeholder="Название, автор или цитата..."
+    )
+
+    col1, col2 = st.columns(2)
     with col1:
-        search_query = st.text_input(
-            "🔍 Поиск", placeholder="Название, автор или цитата..."
-        )
-    with col2:
         category_filter = st.selectbox(
             "Категория",
             [
@@ -76,22 +96,22 @@ if menu == "📖 Каталог книг":
                 "Другое",
             ],
         )
+    with col2:
+        sort_by = st.selectbox(
+            "Сортировать по",
+            [
+                "Названию (А-Я)",
+                "Году (сначала новые)",
+                "Году (сначала старые)",
+            ],
+        )
 
-    sort_by = st.selectbox(
-        "Сортировать по",
-        ["Названию (А-Я)", "Году издания (снач. новые)", "Году издания (снач. старые)"],
-    )
-
-    # Формируем запрос
-    query = "SELECT * FROM books"
-    df = pd.read_sql_query(query, conn)
+    df = pd.read_sql_query("SELECT * FROM books", conn)
 
     if not df.empty:
-        # Фильтрация по категории
         if category_filter != "Все":
             df = df[df["category"] == category_filter]
 
-        # Фильтрация по поиску
         if search_query:
             df = df[
                 df["title"].str.contains(search_query, case=False, na=False)
@@ -99,41 +119,37 @@ if menu == "📖 Каталог книг":
                 | df["notes"].str.contains(search_query, case=False, na=False)
             ]
 
-        # Сортировка
         if sort_by == "Названию (А-Я)":
             df = df.sort_values(by="title")
-        elif sort_by == "Году издания (снач. новые)":
+        elif sort_by == "Году (сначала новые)":
             df = df.sort_values(by="year", ascending=False)
-        elif sort_by == "Году издания (снач. старые)":
+        elif sort_by == "Году (сначала старые)":
             df = df.sort_values(by="year", ascending=True)
 
         st.caption(f"Найдено книг: {len(df)}")
 
-        # Вывод книг в виде карточек
         for idx, row in df.iterrows():
-            with st.expander(
-                f"📖 {row['title']} — {row['author']} ({row['year'] or 'г.н. неизвестен'})"
-            ):
-                c1, c2 = st.columns(2)
-                with c1:
-                    st.write(f"**Категория:** {row['category']}")
-                    st.write(f"**Статус:** {row['status']}")
-                with c2:
-                    st.write(f"**Местонахождение:** {row['location']}")
+            year_str = f"({row['year']} г.)" if row["year"] else ""
+            with st.expander(f"📖 {row['title']} — {row['author']} {year_str}"):
+                st.write(f"**Категория:** {row['category']}")
+                st.write(f"**Статус:** {row['status']}")
+                st.write(f"**Местонахождение:** {row['location']}")
 
                 if row["notes"]:
                     st.info(f"**Заметки / Цитаты:**\n\n{row['notes']}")
 
-                # Скачивание файла, если это электронная книга
                 if row["file_path"] and os.path.exists(row["file_path"]):
-                    with open(row["file_path"], "rb") as f:
-                        st.download_button(
-                            label="📥 Скачать электронную книгу",
-                            data=f,
-                            file_name=os.path.basename(row["file_path"]),
-                            mime="application/octet-stream",
-                            key=f"dl_{row['id']}",
-                        )
+                    try:
+                        with open(row["file_path"], "rb") as f:
+                            st.download_button(
+                                label="📥 Скачать электронную книгу",
+                                data=f.read(),
+                                file_name=os.path.basename(row["file_path"]),
+                                mime="application/octet-stream",
+                                key=f"dl_{row['id']}",
+                            )
+                    except Exception:
+                        st.warning("Файл книги недоступен.")
     else:
         st.info("В базе пока нет книг.")
 
@@ -141,52 +157,39 @@ if menu == "📖 Каталог книг":
 # 2. ДОБАВЛЕНИЕ КНИГИ
 # ==========================================
 elif menu == "➕ Добавить книгу":
-    st.header("Добавить новую книгу в базу")
+    st.header("Добавить книгу")
 
     with st.form("add_book_form", clear_on_submit=True):
-        title = st.text_input("1.1. Название книги*")
-        author = st.text_input("1.2. Автор*")
-
-        col1, col2 = st.columns(2)
-        with col1:
-            year = st.number_input(
-                "1.3. Год издания", min_value=0, max_value=2030, value=2024
-            )
-            category = st.selectbox(
-                "Категория",
-                [
-                    "Художественная",
-                    "Нон-фикшн",
-                    "Детектив",
-                    "Фантастика",
-                    "Психология",
-                    "Учеба / Бизнес",
-                    "Другое",
-                ],
-            )
-        with col2:
-            location = st.text_input(
-                "1.4. Местонахождение",
-                placeholder="например: Шкаф в спальне, 2 полка",
-            )
-            status = st.selectbox(
-                "2. Статус чтения",
-                [
-                    "В очереди",
-                    "В процессе чтения",
-                    "Прочитано",
-                    "Отдано почитать",
-                ],
-            )
-
-        notes = st.text_area(
-            "1.5. Заметки, личные мысли, цитаты",
-            placeholder="Запишите интересные цитаты или впечатления...",
+        title = st.text_input("Название книги*")
+        author = st.text_input("Автор*")
+        year = st.number_input(
+            "Год издания", min_value=0, max_value=2030, value=2024
         )
 
-        # Загрузка электронного файла
+        category = st.selectbox(
+            "Категория",
+            [
+                "Художественная",
+                "Нон-фикшн",
+                "Детектив",
+                "Фантастика",
+                "Психология",
+                "Учеба / Бизнес",
+                "Другое",
+            ],
+        )
+
+        location = st.text_input(
+            "Местонахождение", placeholder="Например: Шкаф в гостиной, 2 полка"
+        )
+        status = st.selectbox(
+            "Статус",
+            ["Дома на полке", "В процессе чтения", "Прочитано", "Отдано почитать"],
+        )
+        notes = st.text_area("Заметки / Цитаты")
+
         uploaded_file = st.file_uploader(
-            "3. Загрузить файл книги (для эл. книг)",
+            "Электронная книга (PDF, EPUB, FB2)",
             type=["pdf", "epub", "fb2", "txt"],
         )
 
@@ -196,7 +199,6 @@ elif menu == "➕ Добавить книгу":
             if title and author:
                 file_path = None
                 if uploaded_file is not None:
-                    # Сохраняем файл локально
                     file_path = os.path.join(BOOKS_DIR, uploaded_file.name)
                     with open(file_path, "wb") as f:
                         f.write(uploaded_file.getbuffer())
@@ -210,7 +212,7 @@ elif menu == "➕ Добавить книгу":
                     (
                         title,
                         author,
-                        year,
+                        int(year),
                         category,
                         location,
                         status,
@@ -219,9 +221,9 @@ elif menu == "➕ Добавить книгу":
                     ),
                 )
                 conn.commit()
-                st.success(f"Книга «{title}» успешно добавлена!")
+                st.success(f"Книга «{title}» добавлена!")
             else:
-                st.error("Название и автор обязательны для заполнения.")
+                st.error("Заполните название и автора.")
 
 # ==========================================
 # 3. РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ
@@ -233,46 +235,49 @@ elif menu == "✏️ Редактировать / Удалить":
 
     if not df.empty:
         book_to_edit = st.selectbox(
-            "Выберите книгу для редактирования / удаления",
+            "Выберите книгу",
             options=df["id"].tolist(),
             format_func=lambda x: f"{df[df['id'] == x]['title'].values[0]} — {df[df['id'] == x]['author'].values[0]}",
         )
 
-        # Извлечем данные книги
         cursor = conn.cursor()
         cursor.execute("SELECT * FROM books WHERE id = ?", (book_to_edit,))
         book_data = cursor.fetchone()
 
-        st.subheader("Изменить данные:")
         new_status = st.selectbox(
-            "Изменить статус",
-            ["В очереди", "В процессе чтения", "Прочитано", "Отдано почитать"],
+            "Статус",
+            ["Дома на полке", "В процессе чтения", "Прочитано", "Отдано почитать"],
             index=[
-                "В очереди",
+                "Дома на полке",
                 "В процессе чтения",
                 "Прочитано",
                 "Отдано почитать",
-            ].index(book_data[6]),
+            ].index(book_data[6])
+            if book_data[6]
+            in [
+                "Дома на полке",
+                "В процессе чтения",
+                "Прочитано",
+                "Отдано почитать",
+            ]
+            else 0,
         )
-        new_location = st.text_input("Изменить местонахождение", value=book_data[5])
-        new_notes = st.text_area("Обновить заметки", value=book_data[7] or "")
+        new_location = st.text_input("Местонахождение", value=book_data[5] or "")
+        new_notes = st.text_area("Заметки", value=book_data[7] or "")
 
-        col_save, col_del = st.columns(2)
-        with col_save:
-            if st.button("💾 Сохранить изменения"):
-                cursor.execute(
-                    "UPDATE books SET status=?, location=?, notes=? WHERE id=?",
-                    (new_status, new_location, new_notes, book_to_edit),
-                )
-                conn.commit()
-                st.success("Изменения сохранены!")
-                st.rerun()
+        if st.button("💾 Сохранить изменения"):
+            cursor.execute(
+                "UPDATE books SET status=?, location=?, notes=? WHERE id=?",
+                (new_status, new_location, new_notes, book_to_edit),
+            )
+            conn.commit()
+            st.success("Сохранено!")
+            st.rerun()
 
-        with col_del:
-            if st.button("❌ Удалить книгу полностью"):
-                cursor.execute("DELETE FROM books WHERE id=?", (book_to_edit,))
-                conn.commit()
-                st.success("Книга удалена!")
-                st.rerun()
+        if st.button("❌ Удалить книгу"):
+            cursor.execute("DELETE FROM books WHERE id=?", (book_to_edit,))
+            conn.commit()
+            st.success("Удалено!")
+            st.rerun()
     else:
-        st.info("База данных пуста.")
+        st.info("База пуста.")
