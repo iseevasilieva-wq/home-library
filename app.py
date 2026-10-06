@@ -20,7 +20,9 @@ os.makedirs(COVERS_DIR, exist_ok=True)
 
 # Подключение к БД
 def get_connection():
-    return sqlite3.connect("library_v2.db", check_same_thread=False)
+    conn = sqlite3.connect("library_v2.db", check_same_thread=False)
+    conn.row_factory = sqlite3.Row  # Обращение к колонкам по имени
+    return conn
 
 
 # Инициализация и авто-обновление структуры БД
@@ -41,9 +43,9 @@ def init_db():
         )
     """)
 
-    # Безопасное добавление колонки cover_path, если её ещё нет
+    # Безопасное добавление колонки cover_path
     cursor.execute("PRAGMA table_info(books)")
-    columns = [col[1] for col in cursor.fetchall()]
+    columns = [col["name"] for col in cursor.fetchall()]
     if "cover_path" not in columns:
         cursor.execute("ALTER TABLE books ADD COLUMN cover_path TEXT")
 
@@ -145,9 +147,8 @@ if menu == "📖 Каталог книг":
         st.caption(f"Найдено книг: {len(df)}")
 
         for idx, row in df.iterrows():
-            year_str = f"({row['year']} г.)" if row["year"] else ""
+            year_str = f"({row['year']} г.)" if pd.notnull(row["year"]) and row["year"] else ""
             with st.expander(f"📖 {row['title']} — {row['author']} {year_str}"):
-                # Отображение обложки, если она загружена и файл существует
                 if (
                     "cover_path" in row
                     and isinstance(row["cover_path"], str)
@@ -163,7 +164,6 @@ if menu == "📖 Каталог книг":
                 if row["notes"]:
                     st.info(f"**Заметки / Цитаты:**\n\n{row['notes']}")
 
-                # Исправленная безопасная проверка пути к файлу книги
                 if (
                     isinstance(row["file_path"], str)
                     and row["file_path"]
@@ -204,20 +204,17 @@ elif menu == "➕ Добавить книгу":
 
         status = st.selectbox("Статус", STATUSES)
 
-        # Расширенное поле заметок (height=200)
         notes = st.text_area(
             "Заметки / Цитаты / Комментарии",
             placeholder="Внесите личные мысли, впечатления или цитаты...",
             height=200,
         )
 
-        # Загрузка обложки
         uploaded_cover = st.file_uploader(
             "🖼️ Обложка книги (JPG, PNG, WEBP)",
             type=["jpg", "jpeg", "png", "webp"],
         )
 
-        # Загрузка файла книги
         uploaded_file = st.file_uploader(
             "📄 Электронная книга (PDF, EPUB, FB2)",
             type=["pdf", "epub", "fb2", "txt"],
@@ -265,7 +262,7 @@ elif menu == "➕ Добавить книгу":
 # ==========================================
 # 3. РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ
 # ==========================================
-elif menu == "✏️️ Редактировать / Удалить":
+elif menu == "✏️ Редактировать / Удалить":
     st.header("Управление записями")
 
     df = pd.read_sql_query("SELECT id, title, author FROM books", conn)
@@ -281,33 +278,35 @@ elif menu == "✏️️ Редактировать / Удалить":
         cursor.execute("SELECT * FROM books WHERE id = ?", (book_to_edit,))
         book_data = cursor.fetchone()
 
-        current_status = (
-            book_data[6] if book_data[6] in STATUSES else STATUSES[0]
-        )
+        if book_data:
+            book_dict = dict(book_data)
 
-        new_status = st.selectbox(
-            "Статус",
-            STATUSES,
-            index=STATUSES.index(current_status),
-        )
-        new_location = st.text_input("Местонахождение", value=book_data[5] or "")
-        new_notes = st.text_area(
-            "Заметки", value=book_data[7] or "", height=200
-        )
+            raw_status = book_dict.get("status")
+            current_status = raw_status if raw_status in STATUSES else STATUSES[0]
 
-        if st.button("💾 Сохранить изменения"):
-            cursor.execute(
-                "UPDATE books SET status=?, location=?, notes=? WHERE id=?",
-                (new_status, new_location, new_notes, book_to_edit),
+            new_status = st.selectbox(
+                "Статус",
+                STATUSES,
+                index=STATUSES.index(current_status),
             )
-            conn.commit()
-            st.success("Сохранено!")
-            st.rerun()
+            new_location = st.text_input("Местонахождение", value=book_dict.get("location") or "")
+            new_notes = st.text_area(
+                "Заметки", value=book_dict.get("notes") or "", height=200
+            )
 
-        if st.button("❌ Удалить книгу"):
-            cursor.execute("DELETE FROM books WHERE id=?", (book_to_edit,))
-            conn.commit()
-            st.success("Удалено!")
-            st.rerun()
+            if st.button("💾 Сохранить изменения"):
+                cursor.execute(
+                    "UPDATE books SET status=?, location=?, notes=? WHERE id=?",
+                    (new_status, new_location, new_notes, book_to_edit),
+                )
+                conn.commit()
+                st.success("Сохранено!")
+                st.rerun()
+
+            if st.button("❌ Удалить книгу"):
+                cursor.execute("DELETE FROM books WHERE id=?", (book_to_edit,))
+                conn.commit()
+                st.success("Удалено!")
+                st.rerun()
     else:
         st.info("База пуста.")
