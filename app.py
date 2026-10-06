@@ -11,9 +11,11 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Папка для электронных книг
+# Папки для файлов и обложек
 BOOKS_DIR = "uploaded_books"
+COVERS_DIR = "uploaded_covers"
 os.makedirs(BOOKS_DIR, exist_ok=True)
+os.makedirs(COVERS_DIR, exist_ok=True)
 
 
 # Подключение к БД
@@ -21,7 +23,7 @@ def get_connection():
     return sqlite3.connect("library_v2.db", check_same_thread=False)
 
 
-# Инициализация таблицы
+# Инициализация и авто-обновление структуры БД
 def init_db():
     conn = get_connection()
     cursor = conn.cursor()
@@ -38,10 +40,39 @@ def init_db():
             file_path TEXT
         )
     """)
+
+    # Безопасное добавление колонки cover_path, если её ещё нет
+    cursor.execute("PRAGMA table_info(books)")
+    columns = [col[1] for col in cursor.fetchall()]
+    if "cover_path" not in columns:
+        cursor.execute("ALTER TABLE books ADD COLUMN cover_path TEXT")
+
     conn.commit()
 
 
 init_db()
+
+# Список категорий
+CATEGORIES = [
+    "Художественная",
+    "Детская литература",
+    "Искусство",
+    "Словари",
+    "Фотокниги",
+    "Нон-фикшн",
+    "Фантастика",
+    "Учеба / Бизнес",
+    "Другое",
+]
+
+# Список статусов
+STATUSES = [
+    "В очередь",
+    "В процессе чтения",
+    "Прочитано",
+    "Отдано почитать",
+    "Аренда",
+]
 
 # --- ЗАЩИТА ПАРОЛЕМ ---
 PASSWORD = "1234"  # Измени пароль при необходимости
@@ -83,16 +114,7 @@ if menu == "📖 Каталог книг":
 
     category_filter = st.selectbox(
         "Категория",
-        [
-            "Все",
-            "Художественная",
-            "Нон-фикшн",
-            "Детектив",
-            "Фантастика",
-            "Психология",
-            "Учеба / Бизнес",
-            "Другое",
-        ],
+        ["Все"] + CATEGORIES,
     )
 
     sort_by = st.selectbox(
@@ -125,6 +147,15 @@ if menu == "📖 Каталог книг":
         for idx, row in df.iterrows():
             year_str = f"({row['year']} г.)" if row["year"] else ""
             with st.expander(f"📖 {row['title']} — {row['author']} {year_str}"):
+                # Отображение обложки, если она загружена и файл существует
+                if (
+                    "cover_path" in row
+                    and isinstance(row["cover_path"], str)
+                    and row["cover_path"]
+                    and os.path.exists(row["cover_path"])
+                ):
+                    st.image(row["cover_path"], width=180)
+
                 st.write(f"**Категория:** {row['category']}")
                 st.write(f"**Статус:** {row['status']}")
                 st.write(f"**Местонахождение:** {row['location']}")
@@ -132,7 +163,12 @@ if menu == "📖 Каталог книг":
                 if row["notes"]:
                     st.info(f"**Заметки / Цитаты:**\n\n{row['notes']}")
 
-                if row["file_path"] and os.path.exists(row["file_path"]):
+                # Исправленная безопасная проверка пути к файлу книги
+                if (
+                    isinstance(row["file_path"], str)
+                    and row["file_path"]
+                    and os.path.exists(row["file_path"])
+                ):
                     try:
                         with open(row["file_path"], "rb") as f:
                             st.download_button(
@@ -160,35 +196,30 @@ elif menu == "➕ Добавить книгу":
             "Год издания", min_value=0, max_value=2030, value=2024, step=1
         )
 
-        category = st.selectbox(
-            "Категория",
-            [
-                "Художественная",
-                "Нон-фикшн",
-                "Детектив",
-                "Фантастика",
-                "Психология",
-                "Учеба / Бизнес",
-                "Другое",
-            ],
-        )
+        category = st.selectbox("Категория", CATEGORIES)
 
         location = st.text_input(
             "Местонахождение", placeholder="Например: Шкаф в гостиной, 2 полка"
         )
 
-        status = st.selectbox(
-            "Статус",
-            ["В очередь", "В процессе чтения", "Прочитано", "Отдано почитать"],
-        )
+        status = st.selectbox("Статус", STATUSES)
 
+        # Расширенное поле заметок (height=200)
         notes = st.text_area(
             "Заметки / Цитаты / Комментарии",
-            placeholder="Внесите личные мысли или цитаты...",
+            placeholder="Внесите личные мысли, впечатления или цитаты...",
+            height=200,
         )
 
+        # Загрузка обложки
+        uploaded_cover = st.file_uploader(
+            "🖼️ Обложка книги (JPG, PNG, WEBP)",
+            type=["jpg", "jpeg", "png", "webp"],
+        )
+
+        # Загрузка файла книги
         uploaded_file = st.file_uploader(
-            "Электронная книга (PDF, EPUB, FB2)",
+            "📄 Электронная книга (PDF, EPUB, FB2)",
             type=["pdf", "epub", "fb2", "txt"],
         )
 
@@ -202,11 +233,17 @@ elif menu == "➕ Добавить книгу":
                     with open(file_path, "wb") as f:
                         f.write(uploaded_file.getbuffer())
 
+                cover_path = None
+                if uploaded_cover is not None:
+                    cover_path = os.path.join(COVERS_DIR, uploaded_cover.name)
+                    with open(cover_path, "wb") as f:
+                        f.write(uploaded_cover.getbuffer())
+
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO books (title, author, year, category, location, status, notes, file_path)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO books (title, author, year, category, location, status, notes, file_path, cover_path)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         title,
@@ -217,6 +254,7 @@ elif menu == "➕ Добавить книгу":
                         status,
                         notes,
                         file_path,
+                        cover_path,
                     ),
                 )
                 conn.commit()
@@ -227,7 +265,7 @@ elif menu == "➕ Добавить книгу":
 # ==========================================
 # 3. РЕДАКТИРОВАНИЕ И УДАЛЕНИЕ
 # ==========================================
-elif menu == "✏️ Редактировать / Удалить":
+elif menu == "✏️️ Редактировать / Удалить":
     st.header("Управление записями")
 
     df = pd.read_sql_query("SELECT id, title, author FROM books", conn)
@@ -243,23 +281,19 @@ elif menu == "✏️ Редактировать / Удалить":
         cursor.execute("SELECT * FROM books WHERE id = ?", (book_to_edit,))
         book_data = cursor.fetchone()
 
-        statuses = [
-            "В очередь",
-            "В процессе чтения",
-            "Прочитано",
-            "Отдано почитать",
-        ]
         current_status = (
-            book_data[6] if book_data[6] in statuses else "В очередь"
+            book_data[6] if book_data[6] in STATUSES else STATUSES[0]
         )
 
         new_status = st.selectbox(
             "Статус",
-            statuses,
-            index=statuses.index(current_status),
+            STATUSES,
+            index=STATUSES.index(current_status),
         )
         new_location = st.text_input("Местонахождение", value=book_data[5] or "")
-        new_notes = st.text_area("Заметки", value=book_data[7] or "")
+        new_notes = st.text_area(
+            "Заметки", value=book_data[7] or "", height=200
+        )
 
         if st.button("💾 Сохранить изменения"):
             cursor.execute(
