@@ -17,11 +17,17 @@ COVERS_DIR = "uploaded_covers"
 os.makedirs(BOOKS_DIR, exist_ok=True)
 os.makedirs(COVERS_DIR, exist_ok=True)
 
+# Список пользователей и их паролей
+USERS = {
+    "1234": "Пользователь 1",
+    "1235": "Пользователь 2",
+}
+
 
 # Подключение к БД
 def get_connection():
     conn = sqlite3.connect("library_v2.db", check_same_thread=False)
-    conn.row_factory = sqlite3.Row  # Обращение к колонкам по имени
+    conn.row_factory = sqlite3.Row
     return conn
 
 
@@ -43,11 +49,15 @@ def init_db():
         )
     """)
 
-    # Безопасное добавление колонки cover_path
+    # Добавляем колонку cover_path, если ее нет
     cursor.execute("PRAGMA table_info(books)")
     columns = [col["name"] for col in cursor.fetchall()]
     if "cover_path" not in columns:
         cursor.execute("ALTER TABLE books ADD COLUMN cover_path TEXT")
+
+    # Добавляем колонку user_id для привязки к пользователю
+    if "user_id" not in columns:
+        cursor.execute("ALTER TABLE books ADD COLUMN user_id TEXT DEFAULT '1234'")
 
     conn.commit()
 
@@ -76,27 +86,36 @@ STATUSES = [
     "Аренда",
 ]
 
-# --- ЗАЩИТА ПАРОЛЕМ ---
-PASSWORD = "1234"  # Измени пароль при необходимости
-
+# --- ЗАЩИТА ПАРОЛЕМ И АВТОРИЗАЦИЯ ---
 if "authenticated" not in st.session_state:
     st.session_state["authenticated"] = False
+    st.session_state["user_id"] = None
 
 if not st.session_state["authenticated"]:
     st.title("🔒 Вход в библиотеку")
-    user_pass = st.text_input("Введите пароль для доступа:", type="password")
+    user_pass = st.text_input("Введите ваш пароль для доступа:", type="password")
     if st.button("Войти"):
-        if user_pass == PASSWORD:
+        if user_pass in USERS:
             st.session_state["authenticated"] = True
+            st.session_state["user_id"] = user_pass
             st.rerun()
         else:
             st.error("Неверный пароль!")
     st.stop()
-# ----------------------
+# ------------------------------------
 
+current_user = st.session_state["user_id"]
+user_name = USERS.get(current_user, "Пользователь")
+
+# Заголовок и боковая панель
 st.title("📚 Личная библиотека")
+st.sidebar.markdown(f"👤 **Вы вошли как:** {user_name}")
 
-# Боковое меню
+if st.sidebar.button("🚪 Выйти"):
+    st.session_state["authenticated"] = False
+    st.session_state["user_id"] = None
+    st.rerun()
+
 menu = st.sidebar.radio(
     "Навигация",
     ["📖 Каталог книг", "➕ Добавить книгу", "✏️ Редактировать / Удалить"],
@@ -108,7 +127,7 @@ conn = get_connection()
 # 1. КАТАЛОГ КНИГ
 # ==========================================
 if menu == "📖 Каталог книг":
-    st.header("Каталог книг")
+    st.header(f"Каталог книг ({user_name})")
 
     search_query = st.text_input(
         "🔍 Поиск", placeholder="Название, автор или цитата..."
@@ -124,7 +143,10 @@ if menu == "📖 Каталог книг":
         ["Названию (А-Я)", "Году (сначала новые)", "Году (сначала старые)"],
     )
 
-    df = pd.read_sql_query("SELECT * FROM books", conn)
+    # Загружаем только книги текущего пользователя
+    df = pd.read_sql_query(
+        "SELECT * FROM books WHERE user_id = ?", conn, params=(current_user,)
+    )
 
     if not df.empty:
         if category_filter != "Все":
@@ -147,7 +169,11 @@ if menu == "📖 Каталог книг":
         st.caption(f"Найдено книг: {len(df)}")
 
         for idx, row in df.iterrows():
-            year_str = f"({row['year']} г.)" if pd.notnull(row["year"]) and row["year"] else ""
+            year_str = (
+                f"({row['year']} г.)"
+                if pd.notnull(row["year"]) and row["year"]
+                else ""
+            )
             with st.expander(f"📖 {row['title']} — {row['author']} {year_str}"):
                 if (
                     "cover_path" in row
@@ -181,7 +207,7 @@ if menu == "📖 Каталог книг":
                     except Exception:
                         st.warning("Файл книги недоступен.")
     else:
-        st.info("В базе пока нет книг.")
+        st.info("В вашей библиотеке пока нет книг.")
 
 # ==========================================
 # 2. ДОБАВЛЕНИЕ КНИГИ
@@ -239,8 +265,8 @@ elif menu == "➕ Добавить книгу":
                 cursor = conn.cursor()
                 cursor.execute(
                     """
-                    INSERT INTO books (title, author, year, category, location, status, notes, file_path, cover_path)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    INSERT INTO books (title, author, year, category, location, status, notes, file_path, cover_path, user_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                     (
                         title,
@@ -252,10 +278,11 @@ elif menu == "➕ Добавить книгу":
                         notes,
                         file_path,
                         cover_path,
+                        current_user,
                     ),
                 )
                 conn.commit()
-                st.success(f"Книга «{title}» успешно добавлена!")
+                st.success(f"Книга «{title}» успешно добавлена в вашу библиотеку!")
             else:
                 st.error("Пожалуйста, заполните Название и Автора.")
 
@@ -265,7 +292,12 @@ elif menu == "➕ Добавить книгу":
 elif menu == "✏️ Редактировать / Удалить":
     st.header("Управление записями")
 
-    df = pd.read_sql_query("SELECT id, title, author FROM books", conn)
+    # Выбираем только книги текущего пользователя
+    df = pd.read_sql_query(
+        "SELECT id, title, author FROM books WHERE user_id = ?",
+        conn,
+        params=(current_user,),
+    )
 
     if not df.empty:
         book_to_edit = st.selectbox(
@@ -275,38 +307,48 @@ elif menu == "✏️ Редактировать / Удалить":
         )
 
         cursor = conn.cursor()
-        cursor.execute("SELECT * FROM books WHERE id = ?", (book_to_edit,))
+        cursor.execute(
+            "SELECT * FROM books WHERE id = ? AND user_id = ?",
+            (book_to_edit, current_user),
+        )
         book_data = cursor.fetchone()
 
         if book_data:
             book_dict = dict(book_data)
 
             raw_status = book_dict.get("status")
-            current_status = raw_status if raw_status in STATUSES else STATUSES[0]
+            current_status = (
+                raw_status if raw_status in STATUSES else STATUSES[0]
+            )
 
             new_status = st.selectbox(
                 "Статус",
                 STATUSES,
                 index=STATUSES.index(current_status),
             )
-            new_location = st.text_input("Местонахождение", value=book_dict.get("location") or "")
+            new_location = st.text_input(
+                "Местонахождение", value=book_dict.get("location") or ""
+            )
             new_notes = st.text_area(
                 "Заметки", value=book_dict.get("notes") or "", height=200
             )
 
             if st.button("💾 Сохранить изменения"):
                 cursor.execute(
-                    "UPDATE books SET status=?, location=?, notes=? WHERE id=?",
-                    (new_status, new_location, new_notes, book_to_edit),
+                    "UPDATE books SET status=?, location=?, notes=? WHERE id=? AND user_id=?",
+                    (new_status, new_location, new_notes, book_to_edit, current_user),
                 )
                 conn.commit()
                 st.success("Сохранено!")
                 st.rerun()
 
             if st.button("❌ Удалить книгу"):
-                cursor.execute("DELETE FROM books WHERE id=?", (book_to_edit,))
+                cursor.execute(
+                    "DELETE FROM books WHERE id=? AND user_id=?",
+                    (book_to_edit, current_user),
+                )
                 conn.commit()
                 st.success("Удалено!")
                 st.rerun()
     else:
-        st.info("База пуста.")
+        st.info("В вашей базе пока нет книг.")
